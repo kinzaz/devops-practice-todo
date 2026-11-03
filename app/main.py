@@ -58,7 +58,7 @@ def list_todos():
         return [dict(row) for row in connection.execute('SELECT * FROM todos ORDER BY id DESC')]
 
 
-@app.post('/api/todos', response_model=Todo, status_code=201)
+@app.post('/api/todos', response_model=Todo, status_code=200)
 def create_todo(todo: TodoCreate):
     with database() as connection:
         cursor = connection.execute('INSERT INTO todos (title) VALUES (?)', (todo.title,))
