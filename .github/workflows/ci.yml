@@ -50,3 +50,91 @@ jobs:
           path: frontend/dist/
           if-no-files-found: error
           retention-days: 7
+
+  deploy-ui:
+    needs: test-and-build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    concurrency:
+      group: todo-production-ui
+      cancel-in-progress: false
+
+    env:
+      RELEASE_NAME: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Download tested UI build
+        uses: actions/download-artifact@v8
+        with:
+          name: todo-ui-${{ github.sha }}
+          path: ui
+
+      - name: Prepare release
+        run: |
+          test -s ui/index.html
+          printf '%s\n' "$GITHUB_SHA" > ui/release.txt
+          chmod -R u=rwX,go=rX ui
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.TODO_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.TODO_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/todo_ci
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/todo_ci ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<'EOF'
+          Host todo-server
+            HostName 201.34.142.215
+            User deploy
+            IdentityFile ~/.ssh/todo_ci
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+          chmod 600 ~/.ssh/config
+
+      - name: Upload release
+        run: |
+          ssh todo-server \
+            "mkdir -m 755 '/var/www/todo-releases/$RELEASE_NAME'"
+
+          scp -r ui/. \
+            "todo-server:/var/www/todo-releases/$RELEASE_NAME/"
+
+      - name: Activate release
+        run: |
+          ssh todo-server bash -s -- "$RELEASE_NAME" <<'REMOTE'
+          set -euo pipefail
+
+          base=/var/www/todo-releases
+          release="$base/$1"
+
+          test -s "$release/index.html"
+
+          printf 'Previous release: '
+          readlink -f "$base/current"
+
+          ln -s "$release" "$base/.current-$1"
+          mv -Tf "$base/.current-$1" "$base/current"
+
+          printf 'Active release: '
+          readlink -f "$base/current"
+          REMOTE
+
+      - name: Verify deployment
+        run: |
+          deployed_sha=$(curl --fail --silent --show-error \
+            --max-time 15 --retry 3 \
+            "https://test-stand.fun/release.txt?run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
+
+          test "$deployed_sha" = "$GITHUB_SHA"
+
+          curl --fail --silent --show-error \
+            --max-time 15 \
+            https://test-stand.fun/api/todos > /dev/null
