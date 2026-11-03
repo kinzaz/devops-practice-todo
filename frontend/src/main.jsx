@@ -50,7 +50,7 @@ function App() {
         <button className="delete" aria-label={`Удалить задачу: ${todo.title}`} disabled={busy} onClick={() => change(() => request(`/${todo.id}`, { method: 'DELETE' }))}>×</button>
       </div>)}
     </div>
-    <footer>{todos.filter(t => !t.done).length} осталось · {todos.filter(t => t.done).length} выполнено</footer>
+    <footer>{todos.filter(t => !t.done).length} осталось · {todos.filter(t => t.done).length} выполнено <span> · v0.2.0</span></footer>
   </main>;
 }
 
