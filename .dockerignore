@@ -9,4 +9,8 @@ tests
 .env.*
 **/*.db
 **/*.db-*
+<<<<<<< Updated upstream
 **/*.sql
+=======
+**/*.sql
+>>>>>>> Stashed changes

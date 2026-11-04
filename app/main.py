@@ -96,8 +96,15 @@ APP_VERSION = (
 def version():
 <<<<<<< Updated upstream
     return {'version': APP_VERSION}
+<<<<<<< Updated upstream
 =======
     return {'version': 'manual-002'}
+
+@app.get('/api/health')
+def health():
+    return {'status': 'ok'}
+>>>>>>> Stashed changes
+=======
 
 @app.get('/api/health')
 def health():
