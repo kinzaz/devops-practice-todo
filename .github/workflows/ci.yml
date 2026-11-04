@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: "Учебный сбой проверки после деплоя"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -107,7 +112,21 @@ jobs:
           scp -r ui/. \
             "todo-server:/var/www/todo-releases/$RELEASE_NAME/"
 
+      - name: Remember previous release
+        id: previous
+        run: |
+          previous=$(ssh todo-server \
+            'readlink -f /var/www/todo-releases/current')
+
+          case "$previous" in
+            /var/www/todo-releases/*) ;;
+            *) echo "Unexpected release path"; exit 1 ;;
+          esac
+
+          printf 'path=%s\n' "$previous" >> "$GITHUB_OUTPUT"
+
       - name: Activate release
+        id: activate
         run: |
           ssh todo-server bash -s -- "$RELEASE_NAME" <<'REMOTE'
           set -euo pipefail
@@ -128,6 +147,9 @@ jobs:
           REMOTE
 
       - name: Verify deployment
+        id: verify
+        env:
+          SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
         run: |
           deployed_sha=$(curl --fail --silent --show-error \
             --max-time 15 --retry 3 \
@@ -138,3 +160,34 @@ jobs:
           curl --fail --silent --show-error \
             --max-time 15 \
             https://test-stand.fun/api/todos > /dev/null
+
+          if [ "$SIMULATE_FAILURE" = "true" ]; then
+            echo "Simulating a failed deployment check"
+            exit 1
+          fi
+
+      - name: Roll back UI
+        if: failure() && steps.activate.outcome == 'success' && steps.verify.outcome == 'failure'
+        env:
+          PREVIOUS_RELEASE: ${{ steps.previous.outputs.path }}
+        run: |
+          ssh todo-server bash -s -- \
+            "$PREVIOUS_RELEASE" "$RELEASE_NAME" <<'REMOTE'
+          set -euo pipefail
+
+          base=/var/www/todo-releases
+          previous=$1
+          failed="$base/$2"
+
+          test -s "$previous/index.html"
+          test "$(readlink -f "$base/current")" = "$failed"
+
+          ln -s "$previous" "$base/.rollback-$2"
+          mv -Tf "$base/.rollback-$2" "$base/current"
+
+          printf 'Restored release: '
+          readlink -f "$base/current"
+          REMOTE
+
+          curl --fail --silent --show-error \
+            --max-time 15 https://test-stand.fun/ > /dev/null
