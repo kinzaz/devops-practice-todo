@@ -95,3 +95,8 @@ APP_VERSION = (
 @app.get('/api/version')
 def version():
     return {'version': APP_VERSION}
+
+
+@app.get('/api/health')
+def health():
+    return {'status': 'ok'}

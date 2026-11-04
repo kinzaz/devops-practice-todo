@@ -24,7 +24,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Download repository
@@ -42,6 +42,33 @@ jobs:
 
       - name: Test API
         run: python -m pytest -q
+
+      - name: Build API image
+        run: docker build -t "todo-api:$GITHUB_SHA" .
+
+      - name: Start API container
+        run: |
+          docker run -d --name todo-api-ci \
+            "todo-api:$GITHUB_SHA"
+
+      - name: Smoke test API image
+        run: |
+          docker exec -i todo-api-ci \
+            python - < tests/smoke_http.py
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          if docker container inspect todo-api-ci > /dev/null 2>&1; then
+            docker logs todo-api-ci
+          fi
+
+      - name: Remove test container
+        if: always()
+        run: |
+          if docker container inspect todo-api-ci > /dev/null 2>&1; then
+            docker rm -f todo-api-ci
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
