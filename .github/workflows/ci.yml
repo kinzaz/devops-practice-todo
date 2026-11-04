@@ -10,6 +10,14 @@ on:
         type: boolean
         default: false
 
+      component:
+        description: "Какой компонент выпускать"
+        type: choice
+        options:
+          - ui
+          - backend
+        default: ui
+
 permissions:
   contents: read
 
@@ -56,9 +64,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Package backend
+        run: |
+          git archive --format=tar.gz \
+            -o backend.tar.gz HEAD app requirements.txt
+
+      - name: Save backend package
+        uses: actions/upload-artifact@v7
+        with:
+          name: todo-backend-${{ github.sha }}
+          path: backend.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   deploy-ui:
     needs: test-and-build
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.component == 'ui'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -191,3 +212,77 @@ jobs:
 
           curl --fail --silent --show-error \
             --max-time 15 https://test-stand.fun/ > /dev/null
+
+  prepare-backend:
+    needs: test-and-build
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.component == 'backend'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    concurrency:
+      group: todo-production-backend
+      cancel-in-progress: false
+
+    env:
+      RELEASE_NAME: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Download backend package
+        uses: actions/download-artifact@v8
+        with:
+          name: todo-backend-${{ github.sha }}
+          path: backend
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.TODO_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.TODO_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/todo_ci
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/todo_ci ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<'EOF'
+          Host todo-server
+            HostName 201.34.142.215
+            User deploy
+            IdentityFile ~/.ssh/todo_ci
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+          chmod 600 ~/.ssh/config
+
+      - name: Upload backend package
+        run: |
+          ssh todo-server \
+            "mkdir -m 755 '/opt/todo/releases/$RELEASE_NAME'"
+
+          scp backend/backend.tar.gz \
+            "todo-server:/opt/todo/releases/$RELEASE_NAME/"
+
+      - name: Prepare Python environment
+        run: |
+          ssh todo-server bash -s -- \
+            "$RELEASE_NAME" "$GITHUB_SHA" <<'REMOTE'
+          set -euo pipefail
+          umask 022
+
+          release="/opt/todo/releases/$1"
+          cd "$release"
+
+          tar -xzf backend.tar.gz
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r requirements.txt
+
+          .venv/bin/python -c \
+            "from app.main import app; print('Application import OK')"
+
+          printf '%s\n' "$2" > revision.txt
+
+          printf 'Prepared release: %s\n' "$release"
+          printf 'Current release: '
+          readlink -f /opt/todo/releases/current
+          REMOTE
