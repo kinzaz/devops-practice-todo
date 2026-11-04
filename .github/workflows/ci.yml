@@ -213,7 +213,7 @@ jobs:
           curl --fail --silent --show-error \
             --max-time 15 https://test-stand.fun/ > /dev/null
 
-  prepare-backend:
+  deploy-backend:
     needs: test-and-build
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.component == 'backend'
     runs-on: ubuntu-latest
@@ -286,3 +286,95 @@ jobs:
           printf 'Current release: '
           readlink -f /opt/todo/releases/current
           REMOTE
+
+      - name: Remember previous backend
+        id: previous
+        run: |
+          previous=$(ssh todo-server \
+            'readlink -f /opt/todo/releases/current')
+
+          case "$previous" in
+            /opt/todo/releases/*) ;;
+            *) echo "Unexpected release path"; exit 1 ;;
+          esac
+
+          printf 'path=%s\n' "$previous" >> "$GITHUB_OUTPUT"
+
+      - name: Activate backend
+        id: activate
+        run: |
+          ssh todo-server bash -s -- "$RELEASE_NAME" <<'REMOTE'
+          set -euo pipefail
+
+          base=/opt/todo/releases
+          release="$base/$1"
+
+          test -x "$release/.venv/bin/python"
+          test -s "$release/app/main.py"
+
+          ln -s "$release" "$base/.current-$1"
+          mv -Tf "$base/.current-$1" "$base/current"
+
+          sudo -n /usr/bin/systemctl restart todo.service
+          REMOTE
+
+      - name: Verify backend
+        id: verify
+        env:
+          SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
+        run: |
+          response=$(curl --fail --silent --show-error \
+            --max-time 10 --retry 5 --retry-delay 1 \
+            --retry-all-errors \
+            "https://test-stand.fun/api/version?run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
+
+          deployed_sha=$(printf '%s' "$response" |
+            python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')
+
+          test "$deployed_sha" = "$GITHUB_SHA"
+
+          curl --fail --silent --show-error \
+            --max-time 10 --retry 5 --retry-delay 1 \
+            --retry-all-errors \
+            https://test-stand.fun/api/todos > /dev/null
+
+          if [ "$SIMULATE_FAILURE" = "true" ]; then
+            echo "Simulating a failed backend check"
+            exit 1
+          fi
+
+      - name: Roll back backend
+        if: failure() && steps.previous.outcome == 'success' && (steps.activate.outcome == 'failure' || steps.verify.outcome == 'failure')
+        env:
+          PREVIOUS_RELEASE: ${{ steps.previous.outputs.path }}
+        run: |
+          ssh todo-server bash -s -- \
+            "$PREVIOUS_RELEASE" "$RELEASE_NAME" <<'REMOTE'
+          set -euo pipefail
+
+          base=/opt/todo/releases
+          previous=$1
+          failed="$base/$2"
+          active=$(readlink -f "$base/current")
+
+          test -x "$previous/.venv/bin/python"
+          test -s "$previous/app/main.py"
+
+          if [ "$active" = "$failed" ]; then
+            ln -s "$previous" "$base/.rollback-$2"
+            mv -Tf "$base/.rollback-$2" "$base/current"
+          elif [ "$active" != "$previous" ]; then
+            echo "Current release changed unexpectedly; refusing rollback"
+            exit 1
+          fi
+
+          sudo -n /usr/bin/systemctl restart todo.service
+
+          printf 'Restored backend: '
+          readlink -f "$base/current"
+          REMOTE
+
+          curl --fail --silent --show-error \
+            --max-time 10 --retry 5 --retry-delay 1 \
+            --retry-all-errors \
+            https://test-stand.fun/api/todos > /dev/null

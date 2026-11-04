@@ -23,7 +23,8 @@ def database():
 @asynccontextmanager
 async def lifespan(app):
     with database() as connection:
-        connection.execute('CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)')
+        connection.execute(
+            'CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)')
     yield
 
 
@@ -82,6 +83,15 @@ def delete_todo(todo_id: int):
             raise HTTPException(404, 'Задача не найдена')
     return Response(status_code=204)
 
+
+REVISION_FILE = Path(__file__).resolve().parent.parent / 'revision.txt'
+APP_VERSION = (
+    REVISION_FILE.read_text().strip()
+    if REVISION_FILE.is_file()
+    else 'development'
+)
+
+
 @app.get('/api/version')
 def version():
-    return {'version': 'manual-002'}
+    return {'version': APP_VERSION}
