@@ -81,3 +81,7 @@ def delete_todo(todo_id: int):
         if cursor.rowcount == 0:
             raise HTTPException(404, 'Задача не найдена')
     return Response(status_code=204)
+
+@app.get('/api/version')
+def version():
+    return {'version': 'manual-002'}
