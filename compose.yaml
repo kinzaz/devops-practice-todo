@@ -1,0 +1,20 @@
+name: todo-local
+
+services:
+  api:
+    build: .
+    image: todo-api:local
+
+    ports:
+      - "127.0.0.1:8001:8000"
+
+    environment:
+      TODO_DATABASE: /data/todo.db
+
+    volumes:
+      - todo-data:/data
+
+volumes:
+  todo-data:
+    external: true
+    name: todo-data
