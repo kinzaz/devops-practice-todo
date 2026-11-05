@@ -16,6 +16,7 @@ on:
         options:
           - ui
           - backend
+          - image
         default: ui
 
 permissions:
@@ -25,6 +26,9 @@ jobs:
   test-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Download repository
@@ -103,6 +107,26 @@ jobs:
           path: backend.tar.gz
           if-no-files-found: error
           retention-days: 7
+
+      - name: Log in to GHCR
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.component == 'image'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" |
+            docker login ghcr.io \
+              -u "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Publish tested API image
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.component == 'image'
+        env:
+          REGISTRY_IMAGE: ghcr.io/kinzaz/devops-practice-todo-api
+        run: |
+          docker tag "todo-api:$GITHUB_SHA" \
+            "$REGISTRY_IMAGE:$GITHUB_SHA"
+
+          docker push "$REGISTRY_IMAGE:$GITHUB_SHA"
 
   deploy-ui:
     needs: test-and-build
